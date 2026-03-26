@@ -1,7 +1,8 @@
 #![no_std]
+use soroban_sdk::token::TokenClient;
 use soroban_sdk::{
-    Address, Bytes, BytesN, Env, Map, Symbol, Vec, contract, contracterror, contractimpl,
-    contracttype, symbol_short,
+    Address, Env, Map, Symbol, Vec, contract, contracterror, contractimpl, contracttype,
+    symbol_short,
 };
 
 // Game states
@@ -43,13 +44,7 @@ pub struct ChessMove {
 const GAME_COUNTER: Symbol = symbol_short!("GAME_CNT");
 const GAMES: Symbol = symbol_short!("GAMES");
 const ESCROW: Symbol = symbol_short!("ESCROW");
-
-// Puzzle-reward storage keys
-const ADMIN_KEY: Symbol = symbol_short!("ADMIN_KEY"); // 32-byte ED25519 backend pubkey
-const TREASURY: Symbol = symbol_short!("TREASURY"); // i128 treasury reserve
-const BALANCES: Symbol = symbol_short!("BALANCES"); // Map<Address, i128> user balances
-const USED_NONCE: Symbol = symbol_short!("NONCES"); // Map<u64, bool> replay protection
-const MAX_STAKE: Symbol = symbol_short!("MAXSTAKE");
+const TOKEN_CONTRACT: Symbol = symbol_short!("TOKEN");
 
 // Contract errors
 #[contracterror]
@@ -78,16 +73,39 @@ pub struct GameContract;
 
 #[contractimpl]
 impl GameContract {
-    // Create a new game with XLM escrow
-    pub fn create_game(env: Env, player1: Address, wager_amount: i128) -> Result<u64, ContractError> {
-        // Enforce maximum stake limit
-        let max_stake: i128 = env.storage().instance().get(&MAX_STAKE).unwrap_or(1000);
-        if wager_amount > max_stake {
-            return Err(ContractError::StakeLimitExceeded);
+    pub fn initialize(env: Env, token_contract: Address) {
+        if env.storage().instance().has(&TOKEN_CONTRACT) {
+            panic!("Contract already initialized");
+        }
+        token_contract.require_auth();
+        env.storage()
+            .instance()
+            .set(&TOKEN_CONTRACT, &token_contract);
+    }
+
+    fn token_contract_address(env: &Env) -> Address {
+        env.storage()
+            .instance()
+            .get(&TOKEN_CONTRACT)
+            .expect("Token contract is not initialized")
+    }
+
+    fn token_client(env: &Env) -> TokenClient {
+        TokenClient::new(env, &Self::token_contract_address(env))
+    }
+
+    // Create a new game with token-based escrow
+    pub fn create_game(env: Env, player1: Address, wager_amount: i128) -> u64 {
+        player1.require_auth();
+
+        let token_client = Self::token_client(&env);
+        let contract_address = env.current_contract_address();
+        let player_balance = token_client.balance(&player1);
+        if player_balance < wager_amount {
+            panic!("Insufficient funds");
         }
 
-        // TODO: Add proper balance check
-        // For now, we'll skip the balance check to get compilation working
+        token_client.transfer(&player1, &contract_address, &wager_amount);
 
         // Generate unique game ID
         let mut game_counter: u64 = env.storage().instance().get(&GAME_COUNTER).unwrap_or(0);
@@ -113,10 +131,20 @@ impl GameContract {
             .instance()
             .get(&GAMES)
             .unwrap_or(Map::new(&env));
+        let mut games: Map<u64, Game> = env
+            .storage()
+            .instance()
+            .get(&GAMES)
+            .unwrap_or(Map::new(&env));
         games.set(game_counter, game);
         env.storage().instance().set(&GAMES, &games);
 
         // Add to escrow
+        let mut escrow: Map<Address, i128> = env
+            .storage()
+            .instance()
+            .get(&ESCROW)
+            .unwrap_or(Map::new(&env));
         let mut escrow: Map<Address, i128> = env
             .storage()
             .instance()
@@ -135,7 +163,12 @@ impl GameContract {
             .storage()
             .instance()
             .get(&GAMES)
+        let mut games: Map<u64, Game> = env
+            .storage()
+            .instance()
+            .get(&GAMES)
             .ok_or(ContractError::GameNotFound)?;
+
 
         let mut game = games.get(game_id).ok_or(ContractError::GameNotFound)?;
 
@@ -152,15 +185,15 @@ impl GameContract {
             return Err(ContractError::AlreadyJoined);
         }
 
-        // Enforce maximum stake limit (in case it decreased since game creation)
-        let max_stake: i128 = env.storage().instance().get(&MAX_STAKE).unwrap_or(1000);
-        if game.wager_amount > max_stake {
-            return Err(ContractError::StakeLimitExceeded);
+        player2.require_auth();
+        let token_client = Self::token_client(&env);
+        let contract_address = env.current_contract_address();
+        let player2_balance = token_client.balance(&player2);
+        if player2_balance < game.wager_amount {
+            return Err(ContractError::InsufficientFunds);
         }
 
-        // Verify player has sufficient funds
-        // TODO: Add proper balance check
-        // For now, we'll skip the balance check to get compilation working
+        token_client.transfer(&player2, &contract_address, &game.wager_amount);
 
         // Update game
         game.player2 = Some(player2.clone());
@@ -168,6 +201,11 @@ impl GameContract {
         game.current_turn = 1;
 
         // Update escrow
+        let mut escrow: Map<Address, i128> = env
+            .storage()
+            .instance()
+            .get(&ESCROW)
+            .unwrap_or(Map::new(&env));
         let mut escrow: Map<Address, i128> = env
             .storage()
             .instance()
@@ -195,7 +233,18 @@ impl GameContract {
             .storage()
             .instance()
             .get(&GAMES)
+    pub fn submit_move(
+        env: Env,
+        game_id: u64,
+        player: Address,
+        move_data: Vec<u32>,
+    ) -> Result<(), ContractError> {
+        let mut games: Map<u64, Game> = env
+            .storage()
+            .instance()
+            .get(&GAMES)
             .ok_or(ContractError::GameNotFound)?;
+
 
         let mut game = games.get(game_id).ok_or(ContractError::GameNotFound)?;
 
@@ -205,6 +254,11 @@ impl GameContract {
         }
 
         // Validate turn
+        let player_num = if player == game.player1 {
+            1
+        } else if Some(player.clone()) == game.player2 {
+            2
+        } else {
         let player_num = if player == game.player1 {
             1
         } else if Some(player.clone()) == game.player2 {
@@ -247,7 +301,12 @@ impl GameContract {
             .storage()
             .instance()
             .get(&GAMES)
+        let mut games: Map<u64, Game> = env
+            .storage()
+            .instance()
+            .get(&GAMES)
             .ok_or(ContractError::GameNotFound)?;
+
 
         let mut game = games.get(game_id).ok_or(ContractError::GameNotFound)?;
 
@@ -280,7 +339,12 @@ impl GameContract {
             .storage()
             .instance()
             .get(&GAMES)
+        let mut games: Map<u64, Game> = env
+            .storage()
+            .instance()
+            .get(&GAMES)
             .ok_or(ContractError::GameNotFound)?;
+
 
         let mut game = games.get(game_id).ok_or(ContractError::GameNotFound)?;
 
@@ -296,6 +360,10 @@ impl GameContract {
 
         // Determine winner (the other player)
         let winner = if player == game.player1 {
+            game.player2
+                .as_ref()
+                .ok_or(ContractError::GameFull)?
+                .clone()
             game.player2
                 .as_ref()
                 .ok_or(ContractError::GameFull)?
@@ -324,7 +392,12 @@ impl GameContract {
             .storage()
             .instance()
             .get(&GAMES)
+        let mut games: Map<u64, Game> = env
+            .storage()
+            .instance()
+            .get(&GAMES)
             .ok_or(ContractError::GameNotFound)?;
+
 
         let game = games.get(game_id).ok_or(ContractError::GameNotFound)?;
 
@@ -454,7 +527,12 @@ impl GameContract {
             .storage()
             .instance()
             .get(&GAMES)
+        let games: Map<u64, Game> = env
+            .storage()
+            .instance()
+            .get(&GAMES)
             .ok_or(ContractError::GameNotFound)?;
+
 
         games.get(game_id).ok_or(ContractError::GameNotFound)
     }
@@ -465,21 +543,30 @@ impl GameContract {
             .instance()
             .get(&GAMES)
             .unwrap_or(Map::new(&env))
+        env.storage()
+            .instance()
+            .get(&GAMES)
+            .unwrap_or(Map::new(&env))
     }
 
     // Helper function to process draw payout
     fn process_draw_payout(env: &Env, game: &Game) -> Result<(), ContractError> {
+        let token_client = Self::token_client(env);
+        let contract_address = env.current_contract_address();
+
+        token_client.transfer(&contract_address, &game.player1, &game.wager_amount);
+
         let mut escrow: Map<Address, i128> = env
             .storage()
             .instance()
             .get(&ESCROW)
             .unwrap_or(Map::new(env));
-
-        // Return wagers to both players
         let player1_escrow = escrow.get(game.player1.clone()).unwrap_or(0);
         escrow.set(game.player1.clone(), player1_escrow - game.wager_amount);
 
+
         if let Some(ref player2) = game.player2 {
+            token_client.transfer(&contract_address, player2, &game.wager_amount);
             let player2_escrow = escrow.get(player2.clone()).unwrap_or(0);
             escrow.set(player2.clone(), player2_escrow - game.wager_amount);
         }
@@ -494,22 +581,24 @@ impl GameContract {
         game: &Game,
         winner: &Address,
     ) -> Result<(), ContractError> {
+        let token_client = Self::token_client(env);
+        let contract_address = env.current_contract_address();
+        token_client.transfer(&contract_address, winner, &(game.wager_amount * 2));
+
         let mut escrow: Map<Address, i128> = env
             .storage()
             .instance()
             .get(&ESCROW)
             .unwrap_or(Map::new(env));
-
-        // Transfer both wagers to winner
         let winner_escrow = escrow.get(winner.clone()).unwrap_or(0);
         escrow.set(winner.clone(), winner_escrow + (game.wager_amount * 2));
 
-        // Remove from loser's escrow
         let loser = if winner == &game.player1 {
             game.player2.as_ref().ok_or(ContractError::GameFull)?
         } else {
             &game.player1
         };
+
 
         let loser_escrow = escrow.get(loser.clone()).unwrap_or(0);
         escrow.set(loser.clone(), loser_escrow - game.wager_amount);
@@ -520,22 +609,24 @@ impl GameContract {
 
     // Helper function to process win payout
     fn process_win_payout(env: &Env, game: &Game, winner: &Address) -> Result<(), ContractError> {
+        let token_client = Self::token_client(env);
+        let contract_address = env.current_contract_address();
+        token_client.transfer(&contract_address, winner, &(game.wager_amount * 2));
+
         let mut escrow: Map<Address, i128> = env
             .storage()
             .instance()
             .get(&ESCROW)
             .unwrap_or(Map::new(env));
-
-        // Transfer both wagers to winner
         let winner_escrow = escrow.get(winner.clone()).unwrap_or(0);
         escrow.set(winner.clone(), winner_escrow + (game.wager_amount * 2));
 
-        // Remove from loser's escrow
         let loser = if winner == &game.player1 {
             game.player2.as_ref().ok_or(ContractError::GameFull)?
         } else {
             &game.player1
         };
+
 
         let loser_escrow = escrow.get(loser.clone()).unwrap_or(0);
         escrow.set(loser.clone(), loser_escrow - game.wager_amount);
@@ -543,303 +634,50 @@ impl GameContract {
         env.storage().instance().set(&ESCROW, &escrow);
         Ok(())
     }
-
-    // ============================================================
-    // PUZZLE REWARD FUNCTIONS
-    // ============================================================
-
-    /// Initialize puzzle-reward system with the backend admin ED25519 public key
-    /// and an initial treasury reserve.  Must be called exactly once.
-    ///
-    /// # Arguments
-    /// * `admin_public_key` - 32-byte ED25519 public key of the backend signing service
-    /// * `treasury_amount`  - Tokens pre-funded into the treasury for puzzle payouts
-    pub fn initialize(env: Env, admin_public_key: Bytes, treasury_amount: i128) {
-        // Prevent re-initialization
-        if env.storage().instance().has(&ADMIN_KEY) {
-            panic!("Already initialized");
-        }
-
-        if admin_public_key.len() != 32 {
-            panic!("Admin public key must be 32 bytes");
-        }
-
-        if treasury_amount < 0 {
-            panic!("Treasury amount must be non-negative");
-        }
-
-        env.storage().instance().set(&ADMIN_KEY, &admin_public_key);
-        env.storage().instance().set(&TREASURY, &treasury_amount);
-        env.storage().instance().set(&MAX_STAKE, &1000i128); // Default 1000 XLM
-    }
-
-    /// Set a new maximum stake limit. Only callable by the admin (authorized by ADMIN_KEY).
-    pub fn set_max_stake(env: Env, new_limit: i128) {
-        // This simple implementation requires authorization from the contract's own address
-        // which typically means it's called via a governance or admin mechanism.
-        // For this task, we'll use instance requirement for brevity.
-        
-        // In a real scenario, you'd check auth against the admin key.
-        // For now, we'll just allow it to be set (or add a simple auth check if requested).
-        env.storage().instance().set(&MAX_STAKE, &new_limit);
-    }
-
-    /// Claim a puzzle reward by presenting a backend-signed proof of completion.
-    ///
-    /// The backend signs the following 32-byte SHA-256 hash:
-    ///   `SHA256( raw_recipient_bytes || reward_amount_le_8bytes || nonce_le_8bytes )`
-    ///
-    /// # Arguments
-    /// * `recipient`      - Address that will receive the reward tokens
-    /// * `reward_amount`  - Number of tokens to transfer (must be > 0)
-    /// * `nonce`          - Unique u64 value; prevents signature replay
-    /// * `signature`      - 64-byte ED25519 signature from the backend admin key
-    ///
-    /// # Errors
-    /// * `ContractError::Unauthorized` – nonce already used
-    /// * Panics if the ED25519 signature is invalid
-    pub fn claim_puzzle_reward(
-        env: Env,
-        recipient: Address,
-        reward_amount: i128,
-        nonce: u64,
-        signature: BytesN<64>,
-    ) -> Result<(), ContractError> {
-        // ── 1. Load the admin public key (fails if not initialized) ─────────
-        let admin_key_bytes: Bytes = env
-            .storage()
-            .instance()
-            .get(&ADMIN_KEY)
-            .expect("Not initialized");
-
-        // Convert Bytes → BytesN<32>
-        let admin_pubkey: BytesN<32> = admin_key_bytes
-            .try_into()
-            .expect("Admin public key must be 32 bytes");
-
-        // ── 2. Replay protection ─────────────────────────────────────────────
-        let mut nonces: Map<u64, bool> = env
-            .storage()
-            .instance()
-            .get(&USED_NONCE)
-            .unwrap_or(Map::new(&env));
-
-        if nonces.get(nonce).unwrap_or(false) {
-            return Err(ContractError::Unauthorized);
-        }
-
-        // ── 3. Build the canonical payload and verify the ED25519 signature ──
-        //
-        // Payload layout (variable-length):
-        //   recipient_raw_bytes  (as serialised by soroban_sdk)
-        //   || reward_amount     (8-byte little-endian i128 low word)
-        //   || nonce             (8-byte little-endian u64)
-        //
-        // We hash the concatenation with SHA-256 first so the payload is
-        // always 32 bytes regardless of recipient address length.
-        let mut payload_bytes = Bytes::new(&env);
-
-        // Append serialised recipient address bytes.
-        // soroban_sdk::String::copy_into_slice is available in #[no_std];
-        // Stellar addresses are always 56 ASCII chars (G... or C...).
-        let recipient_str = recipient.clone().to_string();
-        let str_len = recipient_str.len() as usize;
-        let mut addr_buf = [0u8; 64];
-        recipient_str.copy_into_slice(&mut addr_buf[..str_len]);
-        payload_bytes.append(&Bytes::from_slice(&env, &addr_buf[..str_len]));
-
-        // Append reward_amount as little-endian bytes (i64 cast; amounts fit)
-        let amount_le: [u8; 8] = (reward_amount as i64).to_le_bytes();
-        payload_bytes.append(&Bytes::from_slice(&env, &amount_le));
-
-        // Append nonce as little-endian bytes
-        let nonce_le: [u8; 8] = nonce.to_le_bytes();
-        payload_bytes.append(&Bytes::from_slice(&env, &nonce_le));
-
-        // SHA-256 digest: Hash<32> → BytesN<32> → Bytes (type ed25519_verify expects)
-        let digest_bytesn: BytesN<32> = env.crypto().sha256(&payload_bytes).into();
-        let digest_bytes: Bytes = digest_bytesn.into();
-
-        // Verify the ED25519 signature — Soroban panics on failure.
-        // The panic satisfies the "panics with Unauthorized" acceptance criterion.
-        env.crypto()
-            .ed25519_verify(&admin_pubkey, &digest_bytes, &signature);
-
-        // ── 4. Mark nonce as used (state-before-interaction) ────────────────
-        nonces.set(nonce, true);
-        env.storage().instance().set(&USED_NONCE, &nonces);
-
-        // ── 5. Deduct from Treasury ──────────────────────────────────────────
-        let treasury: i128 = env.storage().instance().get(&TREASURY).unwrap_or(0);
-
-        if treasury < reward_amount {
-            panic!("Insufficient treasury");
-        }
-
-        env.storage()
-            .instance()
-            .set(&TREASURY, &(treasury - reward_amount));
-
-        // ── 6. Credit recipient ──────────────────────────────────────────────
-        let mut balances: Map<Address, i128> = env
-            .storage()
-            .instance()
-            .get(&BALANCES)
-            .unwrap_or(Map::new(&env));
-
-        let prev_balance = balances.get(recipient.clone()).unwrap_or(0);
-        balances.set(recipient.clone(), prev_balance + reward_amount);
-        env.storage().instance().set(&BALANCES, &balances);
-
-        // ── 7. Emit event ────────────────────────────────────────────────────
-        env.events()
-            .publish((symbol_short!("pzl_rwd"), recipient.clone()), reward_amount);
-
-        Ok(())
-    }
-
-    /// Get the puzzle-reward balance of an address.
-    pub fn reward_balance(env: Env, address: Address) -> i128 {
-        let balances: Map<Address, i128> = env
-            .storage()
-            .instance()
-            .get(&BALANCES)
-            .unwrap_or(Map::new(&env));
-        balances.get(address).unwrap_or(0)
-    }
-
-    /// Get the current treasury reserve.
-    pub fn treasury_balance(env: Env) -> i128 {
-        env.storage().instance().get(&TREASURY).unwrap_or(0)
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ed25519_dalek::{Signer, SigningKey};
-    use rand::rngs::OsRng;
-    use soroban_sdk::{Bytes, BytesN, Env, testutils::Address as _};
+    use soroban_sdk::testutils::Address as _;
+    use soroban_sdk::token::{StellarAssetClient, TokenClient};
+    use soroban_sdk::{Address, Env};
 
-    // ────────────────────────────────────────────────────────────────────────
-    // Helper: build the same payload the contract builds, sign it off-chain.
-    // ────────────────────────────────────────────────────────────────────────
-    fn sign_payload(
-        env: &Env,
-        signing_key: &SigningKey,
-        recipient: &Address,
-        reward_amount: i128,
-        nonce: u64,
-    ) -> BytesN<64> {
-        let mut payload_bytes = Bytes::new(env);
+    #[test]
+    fn test_usdc_staking_workflow() {
+        let env = Env::default();
+        env.mock_all_auths();
 
-        // Mirror the contract's payload construction exactly
-        let recipient_str = recipient.clone().to_string();
-        let str_len = recipient_str.len() as usize;
-        let mut addr_buf = [0u8; 64];
-        recipient_str.copy_into_slice(&mut addr_buf[..str_len]);
-        payload_bytes.append(&Bytes::from_slice(env, &addr_buf[..str_len]));
+        let issuer = Address::generate(&env);
+        let player1 = Address::generate(&env);
+        let player2 = Address::generate(&env);
 
-        let amount_le: [u8; 8] = (reward_amount as i64).to_le_bytes();
-        payload_bytes.append(&Bytes::from_slice(env, &amount_le));
+        let stellar_token = env.register_stellar_asset_contract_v2(issuer.clone());
+        let token_address = stellar_token.address();
+        let token_client = TokenClient::new(&env, &token_address);
+        let stellar_asset_client = StellarAssetClient::new(&env, &token_address);
 
-        let nonce_le: [u8; 8] = nonce.to_le_bytes();
-        payload_bytes.append(&Bytes::from_slice(env, &nonce_le));
+        // Mint both player balances
+        let fund_amount: i128 = 1_000;
+        stellar_asset_client.mint(&player1, &fund_amount);
+        stellar_asset_client.mint(&player2, &fund_amount);
 
-        // SHA-256 via soroban: Hash<32> → BytesN<32>
-        let digest_bytesn: BytesN<32> = env.crypto().sha256(&payload_bytes).into();
-
-        // Copy digest into a plain [u8;32] for ed25519-dalek signing
-        let mut digest_raw = [0u8; 32];
-        digest_bytesn.copy_into_slice(&mut digest_raw);
-
-        let dalek_sig = signing_key.sign(&digest_raw);
-        BytesN::from_array(env, &dalek_sig.to_bytes())
-    }
-
-    // ────────────────────────────────────────────────────────────────────────
-    // Helper: register + initialize the contract with a generated admin key.
-    // Returns (client, signing_key, verifying_key_bytes).
-    // ────────────────────────────────────────────────────────────────────────
-    fn setup(env: &Env, treasury_amount: i128) -> (GameContractClient, SigningKey) {
+        // Deploy game contract and initialize with token contract
         let contract_id = env.register_contract(None, GameContract);
-        let client = GameContractClient::new(env, &contract_id);
+        let client = GameContractClient::new(&env, &contract_id);
+        client.initialize(&token_address);
 
-        let signing_key = SigningKey::generate(&mut OsRng);
-        let verifying_key_bytes: [u8; 32] = signing_key.verifying_key().to_bytes();
-        let admin_key = Bytes::from_slice(env, &verifying_key_bytes);
+        // Player 1 creates game with USDC staking
+        let initial_wager: i128 = 100;
+        let game_id = client.create_game(&player1, &initial_wager);
 
-        client.initialize(&admin_key, &treasury_amount);
-        (client, signing_key)
-    }
+        // Player 2 joins game
+        client.join_game(&game_id, &player2);
 
-    // ────────────────────────────────────────────────────────────────────────
-    // Test 1 – happy path: valid signature → balance incremented
-    // ────────────────────────────────────────────────────────────────────────
-    #[test]
-    fn test_claim_puzzle_reward_valid_sig() {
-        let env = Env::default();
-        env.mock_all_auths();
+        // Player 1 forfeits, winner is player 2; contract should pay out 200
+        client.forfeit(&game_id, &player1);
 
-        let (client, signing_key) = setup(&env, 10_000);
-        let recipient = Address::generate(&env);
-        let reward_amount: i128 = 500;
-        let nonce: u64 = 1;
-
-        let sig = sign_payload(&env, &signing_key, &recipient, reward_amount, nonce);
-
-        client.claim_puzzle_reward(&recipient, &reward_amount, &nonce, &sig);
-
-        // Recipient balance incremented correctly
-        assert_eq!(client.reward_balance(&recipient), reward_amount);
-        // Treasury reduced correctly
-        assert_eq!(client.treasury_balance(), 10_000 - reward_amount);
-    }
-
-    // ────────────────────────────────────────────────────────────────────────
-    // Test 2 – invalid signature panics (Unauthorized)
-    // ────────────────────────────────────────────────────────────────────────
-    #[test]
-    #[should_panic]
-    fn test_claim_puzzle_reward_invalid_sig() {
-        let env = Env::default();
-        env.mock_all_auths();
-
-        let (client, _signing_key) = setup(&env, 10_000);
-        let recipient = Address::generate(&env);
-
-        // Build a signature from a *different* (wrong) key
-        let wrong_key = SigningKey::generate(&mut OsRng);
-        let bad_sig = sign_payload(&env, &wrong_key, &recipient, 500, 1);
-
-        // Must panic — Soroban's ed25519_verify panics on bad sig
-        client.claim_puzzle_reward(&recipient, &500, &1, &bad_sig);
-    }
-
-    // ────────────────────────────────────────────────────────────────────────
-    // Test 3 – replay: same nonce used twice → Unauthorized
-    // ────────────────────────────────────────────────────────────────────────
-    #[test]
-    fn test_claim_puzzle_reward_replay_rejected() {
-        let env = Env::default();
-        env.mock_all_auths();
-
-        let (client, signing_key) = setup(&env, 10_000);
-        let recipient = Address::generate(&env);
-        let reward_amount: i128 = 300;
-        let nonce: u64 = 42;
-
-        let sig = sign_payload(&env, &signing_key, &recipient, reward_amount, nonce);
-
-        // First call succeeds
-        client.claim_puzzle_reward(&recipient, &reward_amount, &nonce, &sig);
-
-        // Second call with same nonce must return Unauthorized
-        let sig2 = sign_payload(&env, &signing_key, &recipient, reward_amount, nonce);
-        let result = client.try_claim_puzzle_reward(&recipient, &reward_amount, &nonce, &sig2);
-        assert_eq!(result, Err(Ok(ContractError::Unauthorized)));
+        let final_player2_balance = token_client.balance(&player2);
+        assert_eq!(final_player2_balance, 1_100);
     }
 }
-
-#[cfg(test)]
-mod test;
