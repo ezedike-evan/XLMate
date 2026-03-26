@@ -1,9 +1,6 @@
 [workspace]
 resolver = "2"
-members = [
-    "game_contract",
-    "emergency_circuit_breaker",
-]
+members = ["game_contract", "ai_nft"]
 
 [profile.release]
 opt-level = "z"
