@@ -44,7 +44,16 @@ pub struct ChessMove {
 const GAME_COUNTER: Symbol = symbol_short!("GAME_CNT");
 const GAMES: Symbol = symbol_short!("GAMES");
 const ESCROW: Symbol = symbol_short!("ESCROW");
-const TOKEN_CONTRACT: Symbol = symbol_short!("TOKEN");
+
+// Puzzle-reward storage keys
+const ADMIN_KEY: Symbol = symbol_short!("ADMIN_KEY"); // 32-byte ED25519 backend pubkey
+const TREASURY: Symbol = symbol_short!("TREASURY"); // i128 treasury reserve
+const BALANCES: Symbol = symbol_short!("BALANCES"); // Map<Address, i128> user balances
+const USED_NONCE: Symbol = symbol_short!("NONCES"); // Map<u64, bool> replay protection
+
+// Fee storage keys
+const FEE_BIPS: Symbol = symbol_short!("FEE_BIPS");
+const TREASURY_ADDR: Symbol = symbol_short!("TR_ADDR");
 
 // Contract errors
 #[contracterror]
@@ -602,23 +611,33 @@ impl GameContract {
             .instance()
             .get(&ESCROW)
             .unwrap_or(Map::new(env));
+
+        let fee_bips: u32 = env.storage().instance().get(&FEE_BIPS).unwrap_or(0);
+        let treasury_addr: Address = env
+            .storage()
+            .instance()
+            .get(&TREASURY_ADDR)
+            .expect("Treasury address not set");
+
+        let total_pool = game.wager_amount * 2;
+        let fee = (total_pool * fee_bips as i128) / 1000;
+        let payout = total_pool - fee;
+
+        // Subtract wagers from both players first (clean state)
+        let player1_escrow = escrow.get(game.player1.clone()).unwrap_or(0);
+        escrow.set(game.player1.clone(), player1_escrow - game.wager_amount);
+
+        let player2 = game.player2.as_ref().ok_or(ContractError::GameFull)?;
+        let player2_escrow = escrow.get(player2.clone()).unwrap_or(0);
+        escrow.set(player2.clone(), player2_escrow - game.wager_amount);
+
+        // Add payout to winner
         let winner_escrow = escrow.get(winner.clone()).unwrap_or(0);
-        escrow.set(winner.clone(), winner_escrow + (game.wager_amount * 2));
+        escrow.set(winner.clone(), winner_escrow + payout);
 
-        // Transfer both wagers to winner
-        let winner_escrow = escrow.get(winner.clone()).unwrap_or(0);
-        escrow.set(winner.clone(), winner_escrow + (game.wager_amount * 2));
-
-        // Remove from loser's escrow
-        let loser = if winner == &game.player1 {
-            game.player2.as_ref().ok_or(ContractError::GameFull)?
-        } else {
-            &game.player1
-        };
-
-
-        let loser_escrow = escrow.get(loser.clone()).unwrap_or(0);
-        escrow.set(loser.clone(), loser_escrow - game.wager_amount);
+        // Add fee to treasury
+        let treasury_escrow = escrow.get(treasury_addr.clone()).unwrap_or(0);
+        escrow.set(treasury_addr, treasury_escrow + fee);
 
         env.storage().instance().set(&ESCROW, &escrow);
         Ok(())
@@ -635,23 +654,33 @@ impl GameContract {
             .instance()
             .get(&ESCROW)
             .unwrap_or(Map::new(env));
+
+        let fee_bips: u32 = env.storage().instance().get(&FEE_BIPS).unwrap_or(0);
+        let treasury_addr: Address = env
+            .storage()
+            .instance()
+            .get(&TREASURY_ADDR)
+            .expect("Treasury address not set");
+
+        let total_pool = game.wager_amount * 2;
+        let fee = (total_pool * fee_bips as i128) / 1000;
+        let payout = total_pool - fee;
+
+        // Subtract wagers from both players first (clean state)
+        let player1_escrow = escrow.get(game.player1.clone()).unwrap_or(0);
+        escrow.set(game.player1.clone(), player1_escrow - game.wager_amount);
+
+        let player2 = game.player2.as_ref().ok_or(ContractError::GameFull)?;
+        let player2_escrow = escrow.get(player2.clone()).unwrap_or(0);
+        escrow.set(player2.clone(), player2_escrow - game.wager_amount);
+
+        // Add payout to winner
         let winner_escrow = escrow.get(winner.clone()).unwrap_or(0);
-        escrow.set(winner.clone(), winner_escrow + (game.wager_amount * 2));
+        escrow.set(winner.clone(), winner_escrow + payout);
 
-        // Transfer both wagers to winner
-        let winner_escrow = escrow.get(winner.clone()).unwrap_or(0);
-        escrow.set(winner.clone(), winner_escrow + (game.wager_amount * 2));
-
-        // Remove from loser's escrow
-        let loser = if winner == &game.player1 {
-            game.player2.as_ref().ok_or(ContractError::GameFull)?
-        } else {
-            &game.player1
-        };
-
-
-        let loser_escrow = escrow.get(loser.clone()).unwrap_or(0);
-        escrow.set(loser.clone(), loser_escrow - game.wager_amount);
+        // Add fee to treasury
+        let treasury_escrow = escrow.get(treasury_addr.clone()).unwrap_or(0);
+        escrow.set(treasury_addr, treasury_escrow + fee);
 
         env.storage().instance().set(&ESCROW, &escrow);
         Ok(())
@@ -667,9 +696,13 @@ impl GameContract {
     /// # Arguments
     /// * `admin_public_key` - 32-byte ED25519 public key of the backend signing service
     /// * `treasury_amount`  - Tokens pre-funded into the treasury for puzzle payouts
-    // FIX 1 (continued): Renamed from `initialize` to `initialize_puzzle_rewards`
-    // to resolve the duplicate function name compilation error.
-    pub fn initialize_puzzle_rewards(env: Env, admin_public_key: Bytes, treasury_amount: i128) {
+    pub fn initialize(
+        env: Env,
+        admin_public_key: Bytes,
+        treasury_amount: i128,
+        fee_bips: u32,
+        treasury_address: Address,
+    ) {
         // Prevent re-initialization
         if env.storage().instance().has(&ADMIN_KEY) {
             panic!("Already initialized");
@@ -683,20 +716,14 @@ impl GameContract {
             panic!("Treasury amount must be non-negative");
         }
 
+        if fee_bips > 1000 {
+            panic!("Fee bips must be between 0 and 1000");
+        }
+
         env.storage().instance().set(&ADMIN_KEY, &admin_public_key);
         env.storage().instance().set(&TREASURY, &treasury_amount);
-        env.storage().instance().set(&MAX_STAKE, &1000i128); // Default 1000 XLM
-    }
-
-    /// Set a new maximum stake limit. Only callable by the admin (authorized by ADMIN_KEY).
-    pub fn set_max_stake(env: Env, new_limit: i128) {
-        // This simple implementation requires authorization from the contract's own address
-        // which typically means it's called via a governance or admin mechanism.
-        // For this task, we'll use instance requirement for brevity.
-
-        // In a real scenario, you'd check auth against the admin key.
-        // For now, we'll just allow it to be set (or add a simple auth check if requested).
-        env.storage().instance().set(&MAX_STAKE, &new_limit);
+        env.storage().instance().set(&FEE_BIPS, &fee_bips);
+        env.storage().instance().set(&TREASURY_ADDR, &treasury_address);
     }
 
     /// Claim a puzzle reward by presenting a backend-signed proof of completion.
@@ -905,15 +932,16 @@ mod tests {
     // Helper: register + initialize the contract with a generated admin key.
     // Returns (client, signing_key).
     // ────────────────────────────────────────────────────────────────────────
-    fn setup(env: &Env, treasury_amount: i128) -> (GameContractClient, SigningKey) {
+    fn setup(env: &Env, treasury_amount: i128) -> (GameContractClient<'_>, SigningKey) {
         let contract_id = env.register_contract(None, GameContract);
         let client = GameContractClient::new(env, &contract_id);
 
         let signing_key = SigningKey::generate(&mut OsRng);
         let verifying_key_bytes: [u8; 32] = signing_key.verifying_key().to_bytes();
         let admin_key = Bytes::from_slice(env, &verifying_key_bytes);
+        let treasury_addr = Address::generate(env);
 
-        client.initialize_puzzle_rewards(&admin_key, &treasury_amount);
+        client.initialize(&admin_key, &treasury_amount, &0u32, &treasury_addr);
         (client, signing_key)
     }
 

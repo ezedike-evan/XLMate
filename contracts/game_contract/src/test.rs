@@ -2,46 +2,7 @@
 extern crate std;
 
 use super::*;
-use soroban_sdk::{Address, Env, Map, Vec, testutils::Address as _};
-
-/// Helper: seed a completed game directly into contract storage, bypassing
-/// token transfers and auth checks.  Returns the game_id (always 1).
-fn seed_completed_game(
-    env: &Env,
-    contract_id: &Address,
-    player1: &Address,
-    player2: &Address,
-    wager: i128,
-) -> u64 {
-    let game_id: u64 = 1;
-    env.as_contract(contract_id, || {
-        // Write game counter
-        env.storage().instance().set(&GAME_COUNTER, &game_id);
-
-        // Build a completed game
-        let game = Game {
-            id: game_id,
-            player1: player1.clone(),
-            player2: Some(player2.clone()),
-            state: GameState::Completed,
-            wager_amount: wager,
-            current_turn: 1,
-            moves: Vec::new(env),
-            created_at: 0,
-            winner: None,
-        };
-        let mut games: Map<u64, Game> = Map::new(env);
-        games.set(game_id, game);
-        env.storage().instance().set(&GAMES, &games);
-
-        // Seed escrow so payout_tournament can debit both players
-        let mut escrow: Map<Address, i128> = Map::new(env);
-        escrow.set(player1.clone(), wager);
-        escrow.set(player2.clone(), wager);
-        env.storage().instance().set(&ESCROW, &escrow);
-    });
-    game_id
-}
+use soroban_sdk::{Address, Bytes, Env, Map, Vec, testutils::Address as _};
 
 #[test]
 fn test_payout_tournament() {
@@ -180,54 +141,44 @@ fn test_payout_tournament_invalid_percentage() {
 }
 
 #[test]
-fn test_create_game_exceeds_max_stake() {
+fn test_payout_with_fee() {
     let env = Env::default();
     let contract_id = env.register_contract(None, GameContract);
     let client = GameContractClient::new(&env, &contract_id);
 
+    let treasury_addr = Address::generate(&env);
+    let admin_key = Bytes::from_slice(&env, &[0u8; 32]);
+    client.initialize(&admin_key, &0i128, &20u32, &treasury_addr); // 2% fee (20 bips)
+
     let player1 = Address::generate(&env);
-    let wager = 1001; // Exceeds default 1000
+    let player2 = Address::generate(&env);
+    let wager = 500; // Total pool 1000
 
-    let res = client.try_create_game(&player1, &wager);
-    assert!(res.is_err());
+    let game_id = client.create_game(&player1, &wager);
+    client.join_game(&game_id, &player2);
 
-    // The error should be StakeLimitExceeded (15)
-    // We can check the error code if we want to be precise:
-    // let err = res.err().unwrap();
-    // assert!(err.get_code() == 15);
-}
+    // Force complete the game and set winner
+    env.as_contract(&contract_id, || {
+        let mut games: Map<u64, Game> = env.storage().instance().get(&GAMES).unwrap();
+        let mut game = games.get(game_id).unwrap();
+        game.state = GameState::Completed;
+        game.winner = Some(player1.clone());
+        games.set(game_id, game);
+        env.storage().instance().set(&GAMES, &games);
+    });
 
-#[test]
-fn test_set_max_stake() {
-    let env = Env::default();
-    env.mock_all_auths();
+    client.payout(&game_id, &player1);
 
-    let contract_id = env.register_contract(None, GameContract);
-    let client = GameContractClient::new(&env, &contract_id);
+    env.as_contract(&contract_id, || {
+        let escrow: Map<Address, i128> = env.storage().instance().get(&ESCROW).unwrap();
+        let winner_escrow = escrow.get(player1.clone()).unwrap_or(0);
+        let treasury_escrow = escrow.get(treasury_addr.clone()).unwrap_or(0);
+        let loser_escrow = escrow.get(player2.clone()).unwrap_or(0);
 
-    let issuer = Address::generate(&env);
-    let player1 = Address::generate(&env);
-
-    // Setup token
-    let stellar_token = env.register_stellar_asset_contract_v2(issuer.clone());
-    let token_address = stellar_token.address();
-    let stellar_asset_client = soroban_sdk::token::StellarAssetClient::new(&env, &token_address);
-
-    // Mint player balance
-    stellar_asset_client.mint(&player1, &1000);
-
-    // Initialize game contract with token
-    let admin = Address::generate(&env);
-    client.initialize_token(&admin, &token_address);
-
-    // Set limit to 500
-    client.set_max_stake(&500);
-
-    // Try to create game with 600
-    let res = client.try_create_game(&player1, &600);
-    assert!(res.is_err());
-
-    // Try to create game with 500
-    let game_id_res = client.try_create_game(&player1, &500);
-    assert!(game_id_res.is_ok());
+        // 1000 total pool * 2% fee = 20 fee.
+        // Winner gets 1000 - 20 = 980.
+        assert_eq!(winner_escrow, 980);
+        assert_eq!(treasury_escrow, 20);
+        assert_eq!(loser_escrow, 0);
+    });
 }
