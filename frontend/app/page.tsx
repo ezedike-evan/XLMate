@@ -76,6 +76,35 @@ export default function Home() {
   }, [gameMode]);
 
   useEffect(() => {
+    let isMounted = true;
+    const fetchOnlinePlayers = async () => {
+      try {
+        const resp = await fetch(PLAYER_COUNT_ENDPOINT);
+        if (!resp.ok) {
+          throw new Error(`HTTP ${resp.status}`);
+        }
+        const data = (await resp.json()) as { count?: number };
+        if (isMounted && typeof data.count === "number") {
+          setOnlinePlayerCount(data.count);
+        }
+      } catch (err) {
+        console.error("Failed to fetch player count", err);
+        if (isMounted) {
+          setOnlinePlayerCount(null);
+        }
+      }
+    };
+
+    fetchOnlinePlayers();
+    const intervalId = window.setInterval(fetchOnlinePlayers, 20000);
+
+    return () => {
+      isMounted = false;
+      clearInterval(intervalId);
+    };
+  }, [PLAYER_COUNT_ENDPOINT]);
+
+  useEffect(() => {
     if (matchmakingStatus === "match_found" && gameId) {
       router.push(`/play/${gameId}`);
     }
