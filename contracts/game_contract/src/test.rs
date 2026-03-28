@@ -2,7 +2,48 @@
 extern crate std;
 
 use super::*;
-use soroban_sdk::{Address, Bytes, Env, Map, Vec, testutils::Address as _};
+use soroban_sdk::testutils::Address as _;
+use soroban_sdk::token::{StellarAssetClient, TokenClient};
+use soroban_sdk::{Address, Bytes, Env, Map, Vec};
+
+/// Helper: seed a completed game directly into contract storage, bypassing
+/// token transfers and auth checks.  Returns the game_id (always 1).
+fn seed_completed_game(
+    env: &Env,
+    contract_id: &Address,
+    player1: &Address,
+    player2: &Address,
+    wager: i128,
+) -> u64 {
+    let game_id: u64 = 1;
+    env.as_contract(contract_id, || {
+        // Write game counter
+        env.storage().instance().set(&GAME_COUNTER, &game_id);
+
+        // Build a completed game
+        let game = Game {
+            id: game_id,
+            player1: player1.clone(),
+            player2: Some(player2.clone()),
+            state: GameState::Completed,
+            wager_amount: wager,
+            current_turn: 1,
+            moves: Vec::new(env),
+            created_at: 0,
+            winner: None,
+        };
+        let mut games: Map<u64, Game> = Map::new(env);
+        games.set(game_id, game);
+        env.storage().instance().set(&GAMES, &games);
+
+        // Seed escrow so payout_tournament can debit both players
+        let mut escrow: Map<Address, i128> = Map::new(env);
+        escrow.set(player1.clone(), wager);
+        escrow.set(player2.clone(), wager);
+        env.storage().instance().set(&ESCROW, &escrow);
+    });
+    game_id
+}
 
 #[test]
 fn test_payout_tournament() {
@@ -143,18 +184,31 @@ fn test_payout_tournament_invalid_percentage() {
 #[test]
 fn test_payout_with_fee() {
     let env = Env::default();
+    env.mock_all_auths();
     let contract_id = env.register_contract(None, GameContract);
     let client = GameContractClient::new(&env, &contract_id);
 
     let admin = Address::generate(&env);
-    let treasury_addr = Address::generate(&env);
-    let admin_key = Bytes::from_slice(&env, &[0u8; 32]);
-    env.mock_all_auths();
-    client.initialize_puzzle_rewards(&admin, &admin_key, &0i128, &20u32, &treasury_addr); // 2% fee (20 bips)
-
+    let issuer = Address::generate(&env);
     let player1 = Address::generate(&env);
     let player2 = Address::generate(&env);
+    let treasury_addr = Address::generate(&env);
+
+    // Register token contract
+    let stellar_token = env.register_stellar_asset_contract_v2(issuer);
+    let token_address = stellar_token.address();
+    let stellar_asset_client = StellarAssetClient::new(&env, &token_address);
+
+    // Initialize Game Contract with token
+    client.initialize_token(&admin, &token_address);
+
+    // Initialize Puzzle Rewards/Fees
+    let admin_key = Bytes::from_slice(&env, &[0u8; 32]);
+    client.initialize_puzzle_rewards(&admin, &admin_key, &0i128, &20u32, &treasury_addr); // 2% fee (20 bips)
+
     let wager = 500; // Total pool 1000
+    stellar_asset_client.mint(&player1, &wager);
+    stellar_asset_client.mint(&player2, &wager);
 
     let game_id = client.create_game(&player1, &wager);
     client.join_game(&game_id, &player2);
