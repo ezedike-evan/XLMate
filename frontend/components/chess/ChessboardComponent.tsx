@@ -334,4 +334,4 @@ const ChessboardComponent: React.FC<ChessboardComponentProps> = ({
   );
 };
 
-export default ChessboardComponent;
+export default React.memo(ChessboardComponent);
