@@ -74,7 +74,7 @@ export default function Home() {
       ((playerColor === "white" && game.turn() === "w") ||
         (playerColor === "black" && game.turn() === "b")));
 
-  const handleMove = ({
+  const handleMove = useCallback(({
     sourceSquare,
     targetSquare,
   }: {
@@ -102,7 +102,7 @@ export default function Home() {
     } catch {
       return false;
     }
-  };
+  }, [isMyTurn, game, gameMode, sendMove]);
 
   const handleExit = () => {
     if (gameMode === "online") {
