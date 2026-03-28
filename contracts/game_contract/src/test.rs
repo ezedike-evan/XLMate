@@ -149,7 +149,8 @@ fn test_payout_with_fee() {
     let admin = Address::generate(&env);
     let treasury_addr = Address::generate(&env);
     let admin_key = Bytes::from_slice(&env, &[0u8; 32]);
-    client.initialize(&admin, &admin_key, &0i128, &20u32, &treasury_addr); // 2% fee (20 bips)
+    env.mock_all_auths();
+    client.initialize_puzzle_rewards(&admin, &admin_key, &0i128, &20u32, &treasury_addr); // 2% fee (20 bips)
 
     let player1 = Address::generate(&env);
     let player2 = Address::generate(&env);
