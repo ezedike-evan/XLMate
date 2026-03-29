@@ -1,8 +1,8 @@
 #![no_std]
 use soroban_sdk::token::TokenClient;
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, symbol_short, Address, Bytes, BytesN, Env,
-    Map, Symbol, Vec,
+    Address, Bytes, BytesN, Env, Map, Symbol, Vec, contract, contracterror, contractimpl,
+    contracttype, symbol_short,
 };
 
 // Game states
@@ -80,16 +80,6 @@ pub struct GameContract;
 
 #[contractimpl]
 impl GameContract {
-    // Create a new game with XLM escrow
-    pub fn create_game(env: Env, player1: Address, wager_amount: i128) -> Result<u64, ContractError> {
-        // Enforce maximum stake limit
-        let max_stake: i128 = env.storage().instance().get(&MAX_STAKE).unwrap_or(1000);
-        if wager_amount > max_stake {
-            return Err(ContractError::StakeLimitExceeded);
-        }
-
-        // TODO: Add proper balance check
-        // For now, we'll skip the balance check to get compilation working
     pub fn initialize_token(env: Env, admin: Address, token_contract: Address) {
         if env.storage().instance().has(&TOKEN_CONTRACT) {
             panic!("Contract already initialized");
@@ -119,6 +109,12 @@ impl GameContract {
         player1: Address,
         wager_amount: i128,
     ) -> Result<u64, ContractError> {
+        // Enforce maximum stake limit
+        let max_stake: i128 = env.storage().instance().get(&MAX_STAKE).unwrap_or(1000);
+        if wager_amount > max_stake {
+            return Err(ContractError::StakeLimitExceeded);
+        }
+
         player1.require_auth();
 
         let token_client = Self::token_client(&env);
@@ -648,7 +644,7 @@ impl GameContract {
         // This simple implementation requires authorization from the contract's own address
         // which typically means it's called via a governance or admin mechanism.
         // For this task, we'll use instance requirement for brevity.
-        
+
         // In a real scenario, you'd check auth against the admin key.
         // For now, we'll just allow it to be set (or add a simple auth check if requested).
         env.storage().instance().set(&MAX_STAKE, &new_limit);
