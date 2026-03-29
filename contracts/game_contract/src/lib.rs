@@ -603,10 +603,6 @@ impl GameContract {
         game: &Game,
         winner: &Address,
     ) -> Result<(), ContractError> {
-        let token_client = Self::token_client(env);
-        let contract_address = env.current_contract_address();
-        token_client.transfer(&contract_address, winner, &(game.wager_amount * 2));
-
         let mut escrow: Map<Address, i128> = env
             .storage()
             .instance()
@@ -639,22 +635,30 @@ impl GameContract {
 
         // Add fee to treasury if it exists
         if fee > 0 {
-            if let Some(treasury_addr) = treasury_addr_opt {
+            if let Some(ref treasury_addr) = treasury_addr_opt {
                 let treasury_escrow = escrow.get(treasury_addr.clone()).unwrap_or(0);
-                escrow.set(treasury_addr, treasury_escrow + fee);
+                escrow.set(treasury_addr.clone(), treasury_escrow + fee);
             }
         }
 
         env.storage().instance().set(&ESCROW, &escrow);
+
+        // Perform physical token transfers
+        let token_client = Self::token_client(env);
+        let contract_address = env.current_contract_address();
+        
+        token_client.transfer(&contract_address, winner, &payout);
+        if fee > 0 {
+            if let Some(ref treasury_addr) = treasury_addr_opt {
+                token_client.transfer(&contract_address, treasury_addr, &fee);
+            }
+        }
+
         Ok(())
     }
 
     // Helper function to process win payout
     fn process_win_payout(env: &Env, game: &Game, winner: &Address) -> Result<(), ContractError> {
-        let token_client = Self::token_client(env);
-        let contract_address = env.current_contract_address();
-        token_client.transfer(&contract_address, winner, &(game.wager_amount * 2));
-
         let mut escrow: Map<Address, i128> = env
             .storage()
             .instance()
@@ -687,13 +691,25 @@ impl GameContract {
 
         // Add fee to treasury if it exists
         if fee > 0 {
-            if let Some(treasury_addr) = treasury_addr_opt {
+            if let Some(ref treasury_addr) = treasury_addr_opt {
                 let treasury_escrow = escrow.get(treasury_addr.clone()).unwrap_or(0);
-                escrow.set(treasury_addr, treasury_escrow + fee);
+                escrow.set(treasury_addr.clone(), treasury_escrow + fee);
             }
         }
 
         env.storage().instance().set(&ESCROW, &escrow);
+
+        // Perform physical token transfers
+        let token_client = Self::token_client(env);
+        let contract_address = env.current_contract_address();
+        
+        token_client.transfer(&contract_address, winner, &payout);
+        if fee > 0 {
+            if let Some(ref treasury_addr) = treasury_addr_opt {
+                token_client.transfer(&contract_address, treasury_addr, &fee);
+            }
+        }
+
         Ok(())
     }
 
