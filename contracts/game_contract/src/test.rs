@@ -2,7 +2,7 @@
 extern crate std;
 
 use super::*;
-use soroban_sdk::{testutils::Address as _, Address, Env, Map, Vec};
+use soroban_sdk::{Address, Env, Map, Vec, testutils::Address as _};
 
 /// Helper: seed a completed game directly into contract storage, bypassing
 /// token transfers and auth checks.  Returns the game_id (always 1).
@@ -127,9 +127,9 @@ fn test_payout_tournament_dust() {
     percentages.push_back(50); // 333
     percentages.push_back(30); // 199.8 -> 199
     percentages.push_back(20); // 133.2 -> 133
-                               // Sum without remainder distribution: 333 + 199 + 133 = 665
-                               // Remainder: 666 - 665 = 1
-                               // With remainder to first place: w1 gets 333 + 1 = 334.
+    // Sum without remainder distribution: 333 + 199 + 133 = 665
+    // Remainder: 666 - 665 = 1
+    // With remainder to first place: w1 gets 333 + 1 = 334.
 
     client
         .mock_all_auths()
@@ -190,7 +190,7 @@ fn test_create_game_exceeds_max_stake() {
 
     let res = client.try_create_game(&player1, &wager);
     assert!(res.is_err());
-    
+
     // The error should be StakeLimitExceeded (15)
     // We can check the error code if we want to be precise:
     // let err = res.err().unwrap();
@@ -200,18 +200,33 @@ fn test_create_game_exceeds_max_stake() {
 #[test]
 fn test_set_max_stake() {
     let env = Env::default();
+    env.mock_all_auths();
+
     let contract_id = env.register_contract(None, GameContract);
     let client = GameContractClient::new(&env, &contract_id);
 
+    let issuer = Address::generate(&env);
     let player1 = Address::generate(&env);
-    
+
+    // Setup token
+    let stellar_token = env.register_stellar_asset_contract_v2(issuer.clone());
+    let token_address = stellar_token.address();
+    let stellar_asset_client = soroban_sdk::token::StellarAssetClient::new(&env, &token_address);
+
+    // Mint player balance
+    stellar_asset_client.mint(&player1, &1000);
+
+    // Initialize game contract with token
+    let admin = Address::generate(&env);
+    client.initialize_token(&admin, &token_address);
+
     // Set limit to 500
     client.set_max_stake(&500);
-    
+
     // Try to create game with 600
     let res = client.try_create_game(&player1, &600);
     assert!(res.is_err());
-    
+
     // Try to create game with 500
     let game_id_res = client.try_create_game(&player1, &500);
     assert!(game_id_res.is_ok());
