@@ -44,3 +44,6 @@ redis = { version = "0.24", features = ["tokio-comp", "json"] }
 tokio = { version = "1", features = ["full"] }
 actix-rt = "2.9"
 
+
+[features]
+api = []
