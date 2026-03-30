@@ -143,6 +143,7 @@ struct HorizonEvent {
 ///     ));
 ///
 ///     // Register a match to watch
+/// #   let match_id = uuid::Uuid::new_v4();
 ///     let mut rx = listener
 ///         .track_match(match_id, "CONTRACT_ID_HERE")
 ///         .await;
@@ -233,6 +234,9 @@ impl SorobanEventListener {
     /// Start the polling loop. Spawn this in a dedicated Tokio task:
     ///
     /// ```rust,no_run
+    /// # use std::sync::Arc;
+    /// # use st_core::event_listener::SorobanEventListener;
+    /// # let listener = Arc::new(SorobanEventListener::new("https://horizon-testnet.stellar.org"));
     /// tokio::spawn(async move { listener.run().await });
     /// ```
     ///
@@ -447,7 +451,7 @@ mod tests {
     #[test]
     fn test_wrong_contract_id_ignored() {
         let listener = make_listener();
-        let contract  = "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABSC4";
+        let contract = "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABSC4";
         let different = "CBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB";
         let event = make_event(different, &encode_topic("staked"), "txabc");
 
@@ -479,8 +483,8 @@ mod tests {
     #[tokio::test]
     async fn test_track_match_registers_awaiting_stake_status() {
         let listener = make_listener();
-        let match_id  = Uuid::new_v4();
-        let contract  = "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABSC4";
+        let match_id = Uuid::new_v4();
+        let contract = "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABSC4";
 
         listener.track_match(match_id, contract).await;
 
@@ -493,8 +497,8 @@ mod tests {
     #[tokio::test]
     async fn test_stake_event_broadcasts_start_signal() {
         let listener = make_listener();
-        let match_id  = Uuid::new_v4();
-        let contract  = "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABSC4";
+        let match_id = Uuid::new_v4();
+        let contract = "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABSC4";
 
         let mut rx = listener.track_match(match_id, contract).await;
 
@@ -512,8 +516,8 @@ mod tests {
     #[tokio::test]
     async fn test_stake_event_transitions_status_to_in_progress() {
         let listener = make_listener();
-        let match_id  = Uuid::new_v4();
-        let contract  = "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABSC4";
+        let match_id = Uuid::new_v4();
+        let contract = "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABSC4";
 
         listener.track_match(match_id, contract).await;
 
@@ -530,8 +534,8 @@ mod tests {
     #[tokio::test]
     async fn test_duplicate_stake_event_ignored() {
         let listener = make_listener();
-        let match_id  = Uuid::new_v4();
-        let contract  = "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABSC4";
+        let match_id = Uuid::new_v4();
+        let contract = "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABSC4";
 
         let mut rx = listener.track_match(match_id, contract).await;
 
@@ -549,8 +553,8 @@ mod tests {
     #[tokio::test]
     async fn test_untrack_removes_match() {
         let listener = make_listener();
-        let match_id  = Uuid::new_v4();
-        let contract  = "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABSC4";
+        let match_id = Uuid::new_v4();
+        let contract = "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABSC4";
 
         listener.track_match(match_id, contract).await;
         listener.untrack_match(contract).await;
