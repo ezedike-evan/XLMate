@@ -300,7 +300,7 @@ fn test_configure_fees_permissioned() {
     let admin_key = Bytes::from_slice(&env, &[0u8; 32]);
 
     env.mock_all_auths();
-    client.initialize(&admin, &admin_key, &0i128, &0u32, &treasury_addr);
+    client.initialize_puzzle_rewards(&admin, &admin_key, &0i128, &0u32, &treasury_addr);
 
     // Update fees as admin
     let new_treasury = Address::generate(&env);

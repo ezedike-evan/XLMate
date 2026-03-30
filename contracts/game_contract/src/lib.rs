@@ -51,6 +51,7 @@ pub struct ChessMove {
 const GAME_COUNTER: Symbol = symbol_short!("GAME_CNT");
 const GAMES: Symbol = symbol_short!("GAMES");
 const ESCROW: Symbol = symbol_short!("ESCROW");
+const TOKEN_CONTRACT: Symbol = symbol_short!("TOKEN");
 
 // Puzzle-reward  (#199)
 const ADMIN_KEY: Symbol = symbol_short!("ADMIN_KEY"); // BytesN<32> ED25519 backend pubkey
@@ -172,7 +173,10 @@ impl GameContract {
         env.storage().instance().set(&ESCROW, &escrow);
 
         Ok(game_counter)
+<<<<<<< feat/soroban-event-listener
         Ok(game_counter)
+=======
+>>>>>>> main
     }
 
     pub fn join_game(env: Env, game_id: u64, player2: Address) -> Result<(), ContractError> {
@@ -842,7 +846,11 @@ mod tests {
         let admin_key = Bytes::from_slice(env, &verifying_key_bytes);
         let treasury_addr = Address::generate(env);
 
+<<<<<<< feat/soroban-event-listener
         client.initialize(
+=======
+        client.initialize_puzzle_rewards(
+>>>>>>> main
             &admin,
             &admin_key,
             &treasury_amount,

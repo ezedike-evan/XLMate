@@ -22,6 +22,7 @@ import { RiAliensFill } from "react-icons/ri";
 import { useChessSocket } from "@/hook/useChessSocket";
 import { useMatchmaking } from "@/hook/useMatchmaking";
 import { useRouter } from "next/navigation";
+import { useMatchmakingContext } from "@/context/matchmakingContext";
 
 export default function Home() {
   const [game] = useState(new Chess());
@@ -67,13 +68,20 @@ export default function Home() {
     [gameId, socketSendMove, matchmakingSendMove],
   );
 
-  // Kick off matchmaking when online mode is selected
+    fetchOnlinePlayers();
+    const intervalId = window.setInterval(fetchOnlinePlayers, 20000);
+
+    return () => {
+      isMounted = false;
+      clearInterval(intervalId);
+    };
+  }, [PLAYER_COUNT_ENDPOINT]);
+
   useEffect(() => {
-    if (gameMode === "online") {
-      joinMatchmaking();
+    if (matchmakingStatus === "match_found" && gameId) {
+      router.push(`/play/${gameId}`);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [gameMode]);
+  }, [matchmakingStatus, gameId, router]);
 
   useEffect(() => {
     let isMounted = true;
