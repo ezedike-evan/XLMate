@@ -21,6 +21,8 @@ import { useChessSocket } from "@/hook/useChessSocket";
 import { useMatchmaking } from "@/hook/useMatchmaking";
 import { useRouter } from "next/navigation";
 import { useMatchmakingContext } from "@/context/matchmakingContext";
+import { FaUser } from "react-icons/fa";
+import { RiAliensFill } from "react-icons/ri";
 
 export default function Home() {
   const [game] = useState(new Chess());
