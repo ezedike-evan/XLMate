@@ -173,17 +173,9 @@ impl GameContract {
         env.storage().instance().set(&ESCROW, &escrow);
 
         Ok(game_counter)
-<<<<<<< feat/soroban-event-listener
-        Ok(game_counter)
-=======
->>>>>>> main
     }
 
     pub fn join_game(env: Env, game_id: u64, player2: Address) -> Result<(), ContractError> {
-        let mut games: Map<u64, Game> = env
-            .storage()
-            .instance()
-            .get(&GAMES)
         let mut games: Map<u64, Game> = env
             .storage()
             .instance()
@@ -291,10 +283,6 @@ impl GameContract {
             .storage()
             .instance()
             .get(&GAMES)
-        let mut games: Map<u64, Game> = env
-            .storage()
-            .instance()
-            .get(&GAMES)
             .ok_or(ContractError::GameNotFound)?;
 
 
@@ -317,10 +305,6 @@ impl GameContract {
     }
 
     pub fn forfeit(env: Env, game_id: u64, player: Address) -> Result<(), ContractError> {
-        let mut games: Map<u64, Game> = env
-            .storage()
-            .instance()
-            .get(&GAMES)
         let mut games: Map<u64, Game> = env
             .storage()
             .instance()
@@ -361,10 +345,6 @@ impl GameContract {
     }
 
     pub fn payout(env: Env, game_id: u64, winner: Address) -> Result<(), ContractError> {
-        let mut games: Map<u64, Game> = env
-            .storage()
-            .instance()
-            .get(&GAMES)
         let mut games: Map<u64, Game> = env
             .storage()
             .instance()
@@ -479,10 +459,6 @@ impl GameContract {
             .storage()
             .instance()
             .get(&GAMES)
-        let games: Map<u64, Game> = env
-            .storage()
-            .instance()
-            .get(&GAMES)
             .ok_or(ContractError::GameNotFound)?;
 
 
@@ -490,10 +466,6 @@ impl GameContract {
     }
 
     pub fn get_all_games(env: Env) -> Map<u64, Game> {
-        env.storage()
-            .instance()
-            .get(&GAMES)
-            .unwrap_or(Map::new(&env))
         env.storage()
             .instance()
             .get(&GAMES)
@@ -846,11 +818,7 @@ mod tests {
         let admin_key = Bytes::from_slice(env, &verifying_key_bytes);
         let treasury_addr = Address::generate(env);
 
-<<<<<<< feat/soroban-event-listener
-        client.initialize(
-=======
         client.initialize_puzzle_rewards(
->>>>>>> main
             &admin,
             &admin_key,
             &treasury_amount,
