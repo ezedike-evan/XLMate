@@ -39,7 +39,7 @@ st_core = { path = "../st_core", features = ["api"] }
 
 [features]
 default = []
-api = []
+enable-api = []
 
 # For Redis Pub/Sub in WebSocket
 redis = { version = "0.24", features = ["tokio-comp", "json"] }
